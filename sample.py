@@ -2,11 +2,51 @@
 
 import json
 import logging
+import os
 from typing import Any, Dict, List
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Assume insightsdb is an existing module with the InsightsDB class
+# Replace the following import with the actual import statement as per your project structure
+# For example:
+# from insightsdb_module import insightsdb
+# Here, we'll assume it's available in the global namespace
+# If not, you need to adjust the import accordingly.
+# For demonstration purposes, we'll define a mock InsightsDB class.
+# Remove or replace this with the actual import in your environment.
+
+class insightsdb:
+    def __init__(self):
+        # Initialize your actual database connection here
+        import sqlite3
+        self.connection = sqlite3.connect('data.db')  # Replace with actual DB
+        self.connection.row_factory = sqlite3.Row
+        self.cursor = self.connection.cursor()
+
+    def _execute(self, query: str, params: tuple = ()) -> List[sqlite3.Row]:
+        """
+        Execute a SQL query with optional parameters.
+
+        :param query: SQL query to execute.
+        :param params: Tuple of parameters to pass with the query.
+        :return: List of sqlite3.Row objects for SELECT queries, empty list otherwise.
+        """
+        try:
+            self.cursor.execute(query, params)
+            self.connection.commit()
+            if query.strip().upper().startswith("SELECT"):
+                return self.cursor.fetchall()
+            return []
+        except sqlite3.Error as e:
+            logger.error(f"Database error: {e}")
+            return []
+
+    def close(self):
+        """Close the database connection."""
+        self.connection.close()
 
 class DataInserter:
     """
@@ -111,7 +151,8 @@ class DataInserter:
             return
 
         if result:
-            existing_record = dict(result[0])  # Convert sqlite3.Row to dict if necessary
+            # Assuming db._execute returns a list of sqlite3.Row objects
+            existing_record = dict(result[0])  # Convert sqlite3.Row to dict
             # Check if JSON fields differ
             if self.records_differ(existing_record, record, json_columns):
                 # Prepare fields for update
@@ -184,111 +225,56 @@ class DataInserter:
         self.db.close()
         logger.info("Database connection closed.")
 
+def load_json_file(file_path: str) -> Dict[str, Any]:
+    """
+    Load JSON data from a file.
+
+    :param file_path: Path to the JSON file.
+    :return: Parsed JSON data as a dictionary.
+    """
+    if not os.path.isfile(file_path):
+        logger.error(f"File '{file_path}' does not exist.")
+        return {}
+
+    try:
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        logger.info(f"Successfully loaded data from '{file_path}'.")
+        return data
+    except json.JSONDecodeError as e:
+        logger.error(f"Error decoding JSON from file '{file_path}': {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error reading file '{file_path}': {e}")
+
+    return {}
+
 def main():
+    # Define the fixed path to perf_data.json relative to the script's directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    json_file_path = os.path.join(script_dir, 'perf_data.json')
+
+    # Load data from the specified JSON file
+    data = load_json_file(json_file_path)
+    if not data:
+        logger.error("No data to process. Exiting.")
+        return
+
     # Initialize the DataInserter
     inserter = DataInserter()
 
-    # Insert sample data
-    logger.info("Inserting sample data:")
-    inserter.insert_data(SAMPLE_DATA)
+    # Insert data
+    logger.info("Inserting data from perf_data.json:")
+    inserter.insert_data(data)
 
-    # Attempt to insert the same data again to test duplicate prevention and update logic
-    logger.info("\nInserting duplicate sample data to test update logic:")
-    inserter.insert_data(SAMPLE_DATA)
+    # Optionally, you can attempt to insert the same data again to test duplicate prevention and update logic
+    # Uncomment the following lines if you want to perform this step
+    """
+    logger.info("\nInserting duplicate data from perf_data.json to test update logic:")
+    inserter.insert_data(data)
+    """
 
-    # Define additional data with modifications to test update functionality
-    ADDITIONAL_DATA = {
-        "unit_test_records": [
-            {
-                "repo_url": "https://github.cloud.test.com/perf",
-                "github_org": "perf-test-v2",
-                "business_application_id": "CI-perf-ba-id-01",
-                "component_id": "CI-perf-com-id-01",
-                "github_repo": "level",
-                "github_branch": "main",
-                "coverage": "0.8",  # Updated coverage
-                "pipeline_id": "PERF01-test-pipe-line-id3127244037",
-                "artifact_info": {"info": "updated"},
-                "message_blob": {},
-                "policy_result": "pass",  # Updated result
-                "source": "Sonar",
-                "artifact_url": "https://artifactory.cloud.test.com",
-                "artifact_name": "perf_test_artifact",
-                "artifact_version": "level",
-                "policy_reasons": [{"errorCode": "TMM100", "errorMessage": "Sample error message updated"}]
-            },
-            {
-                "repo_url": "https://github.cloud.test.com/perf",
-                "github_org": "perf-test-v2",
-                "business_application_id": "CI-perf-ba-id-02",
-                "component_id": "CI-perf-com-id-02",
-                "github_repo": "level2",
-                "github_branch": "develop",
-                "coverage": "0.75",
-                "pipeline_id": "PERF02-test-pipe-line-id3127244038",
-                "artifact_info": {},
-                "message_blob": {},
-                "policy_result": "fail",
-                "source": "Sonar",
-                "artifact_url": "https://artifactory.cloud.test.com",
-                "artifact_name": "perf_test_artifact2",
-                "artifact_version": "level2",
-                "policy_reasons": [{"errorCode": "TMM101", "errorMessage": "Another error message"}]
-            }
-        ],
-        "sevenps_result_set": [
-            {
-                "repo_url": "https://github.cloud.test.com/perf-test-",
-                "artifact_url": "https://artifactory.cloud.test.com/b",
-                "artifact_name": "perf_test_artifact",
-                "artifact_version": "level4",
-                "test_type": "component_tests",
-                "test_request_id": "0000-1111-2222",  # Existing record with updates
-                "asv": "ASVTEST_UPDATED",
-                "bap": "BAPTEST",
-                "report_doc": {"report": "updated"},
-                "traceability_doc": {},
-                "source": "enterprise_test_report_aggregates",
-                "github_org": "perf-test",
-                "github_repo": "level4",
-                "github_branch": "feature"
-            }
-        ],
-        "jira_issues": [
-            {
-                "jira_key": "TEST-4-cr-comp-auto",
-                "repo_url": "https://github.cloud.test.com/perf-test-v2/1",
-                "jira_status": "In Progress",  # Updated status
-                "issue_data": {"data": "updated"},
-                "bapci": "BAPTESTCI",
-                "status": "In Progress",
-                "category": "Component",
-                "priority": "High",  # Updated priority
-                "test_type": "Automated",
-                "issue_key": "TEST-4-cr-comp-auto",
-                "issuetype": "Test",
-                "gitrepourl": "https://github.cloud.test.com/perf-test-v",
-                "softwareversion": "1.1",  # Updated version
-                "businesscapability": "Updated Capability",
-                "issue_changed_timestamp": "2024-11-22 15:30:50.000000",
-                "marked_for_delete": False,
-                "source": "jira_collector"
-            }
-        ],
-        "manual_test_records": [
-            {
-                "jira_key": "TEST-4-cr-ld-man",
-                "artifact_url": "https://artifactory.cloud.test.com",
-                "execution_result": [{"result": "passed"}],  # Updated execution result
-                "repo_url": "https://github.cloud.test.com/perf-test",
-                "issue_status": "Approved"
-            }
-        ]
-    }
-
-    # Insert additional data with modifications
-    logger.info("\nInserting additional data with modifications:")
-    inserter.insert_data(ADDITIONAL_DATA)
+    # Insert additional data with modifications (if needed)
+    # You can define another JSON file or modify the existing perf_data.json and rerun the script
 
     # Close the database connection
     inserter.close()
