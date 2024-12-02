@@ -1,4 +1,23 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import json
+import logging
 import re
+from typing import Any, Dict, List
+
+# Add project root to sys.path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, '../../'))
+sys.path.insert(0, project_root)
+
+# Now you can import from src
+from src.database import insightsdb
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class DataInserter:
     """
@@ -36,14 +55,17 @@ class DataInserter:
             }
         }
 
-        # Initialize counters
+        # Initialize overall counters
         self.total_records = 0
         self.total_insertions = 0
         self.total_updates = 0
-        self.total_skips = 0  # New Counter for Total Skips
+        self.total_skips = 0  # Total number of records skipped
 
-        # Initialize table-specific skip counters
-        self.table_skips = {table: 0 for table in self.table_configs.keys()}
+        # Initialize table-specific statistics
+        self.table_stats = {
+            table: {"total": 0, "insertions": 0, "updates": 0, "skips": 0}
+            for table in self.table_configs.keys()
+        }
 
     def serialize_field(self, value: Any) -> str:
         """
@@ -107,16 +129,6 @@ class DataInserter:
         :param table_name: Name of the table.
         :param record: Dictionary containing column-value pairs.
         """
-        self.total_records += 1  # Increment total records counter
-        config = self.table_configs.get(table_name)
-        if not config:
-            logger.warning(f"No configuration found for table '{table_name}'. Skipping record.")
-            return
-
-        unique_keys = config["unique_keys"]
-        excluded_columns = config["excluded_columns"]
-        json_columns = config.get("json_columns", [])
-
         # Validate table name
         if not self.validate_table_name(table_name):
             logger.error(f"Table name '{table_name}' is invalid. Skipping record.")
@@ -126,12 +138,29 @@ class DataInserter:
         cleaned_record = self.clean_record_keys(record)
         logger.debug(f"Cleaned record keys for table '{table_name}': {list(cleaned_record.keys())}")
 
+        # Increment counters
+        self.total_records += 1
+        self.table_stats[table_name]["total"] += 1
+
+        config = self.table_configs.get(table_name)
+        if not config:
+            logger.warning(f"No configuration found for table '{table_name}'. Skipping record.")
+            self.total_skips += 1
+            self.table_stats[table_name]["skips"] += 1
+            return
+
+        unique_keys = config["unique_keys"]
+        excluded_columns = config["excluded_columns"]
+        json_columns = config.get("json_columns", [])
+
         # Extract unique key values
         try:
             unique_values = {key: cleaned_record[key] for key in unique_keys}
             logger.debug(f"Unique keys for table '{table_name}': {unique_values}")
         except KeyError as ke:
             logger.error(f"Missing unique key '{ke.args[0]}' for table '{table_name}'. Record: {record}. Skipping.")
+            self.total_skips += 1
+            self.table_stats[table_name]["skips"] += 1
             return
 
         # Construct WHERE clause for unique keys
@@ -146,7 +175,7 @@ class DataInserter:
         except Exception as e:
             logger.error(f"Error executing SELECT for table '{table_name}': {e}")
             self.total_skips += 1
-            self.table_skips[table_name] += 1
+            self.table_stats[table_name]["skips"] += 1
             return
 
         if result:
@@ -177,14 +206,15 @@ class DataInserter:
                     logger.debug(f"Executing UPDATE query: {update_query} with values {update_values}")
                     self.db._execute(update_query, tuple(update_values))
                     logger.info(f"Updated record in '{table_name}': {unique_values}")
-                    self.total_updates += 1  # Increment updates counter
+                    self.total_updates += 1
+                    self.table_stats[table_name]["updates"] += 1
                 except Exception as e:
                     logger.error(f"Error updating record in '{table_name}': {e}")
             else:
                 # Record exists and no changes detected; skip
                 logger.info(f"No changes detected for record in '{table_name}': {unique_values}. Skipping update.")
-                self.total_skips += 1  # Increment total skips
-                self.table_skips[table_name] += 1  # Increment table-specific skips
+                self.total_skips += 1
+                self.table_stats[table_name]["skips"] += 1
         else:
             # Prepare fields for insertion
             insert_fields = []
@@ -206,7 +236,8 @@ class DataInserter:
                 logger.debug(f"Executing INSERT query: {insert_query} with values {insert_values}")
                 self.db._execute(insert_query, tuple(insert_values))
                 logger.info(f"Inserted new record into '{table_name}': {unique_values}")
-                self.total_insertions += 1  # Increment insertions counter
+                self.total_insertions += 1
+                self.table_stats[table_name]["insertions"] += 1
             except Exception as e:
                 logger.error(f"Error inserting record into '{table_name}': {e}")
 
@@ -229,21 +260,83 @@ class DataInserter:
 
                 self.insert_or_update_record(table_name, record)
 
-        # After processing all records, log the statistics
+        # After processing all records, log the overall and table-specific statistics
         logger.info("----- Data Insertion Statistics -----")
         logger.info(f"Total Records Processed: {self.total_records}")
         logger.info(f"Total Insertions: {self.total_insertions}")
         logger.info(f"Total Updates: {self.total_updates}")
-        logger.info(f"Total Skips: {self.total_skips}")  # Log Total Skips
+        logger.info(f"Total Skips: {self.total_skips}")
         logger.info("-------------------------------------")
 
-        # Log table-specific skip counts
-        logger.info("----- Table-Specific Skips -----")
-        for table, skips in self.table_skips.items():
-            logger.info(f"Total Skips for '{table}': {skips}")
-        logger.info("--------------------------------")
-    
+        # Log table-specific statistics
+        logger.info("----- Table-Specific Statistics -----")
+        for table, stats in self.table_stats.items():
+            logger.info(f"Table: {table}")
+            logger.info(f"  Total Records Processed: {stats['total']}")
+            logger.info(f"  Insertions: {stats['insertions']}")
+            logger.info(f"  Updates: {stats['updates']}")
+            logger.info(f"  Skips: {stats['skips']}")
+        logger.info("-------------------------------------")
+
     def close(self):
         """Close the database connection."""
         self.db.close()
         logger.info("Database connection closed.")
+
+def load_json_file(file_path: str) -> Dict[str, Any]:
+    """
+    Load JSON data from a file.
+
+    :param file_path: Path to the JSON file.
+    :return: Parsed JSON data as a dictionary.
+    """
+    if not os.path.isfile(file_path):
+        logger.error(f"File '{file_path}' does not exist.")
+        return {}
+
+    try:
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        logger.info(f"Successfully loaded data from '{file_path}'.")
+        return data
+    except json.JSONDecodeError as e:
+        logger.error(f"Error decoding JSON from file '{file_path}': {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error reading file '{file_path}': {e}")
+
+    return {}
+
+def main():
+    # Define the fixed path to perf_data.json relative to the script's directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    json_file_path = os.path.join(script_dir, 'perf_data.json')
+
+    # Load data from the specified JSON file
+    data = load_json_file(json_file_path)
+    if not data:
+        logger.error("No data to process. Exiting.")
+        return
+
+    # Initialize the DataInserter
+    inserter = DataInserter()
+
+    # Insert data
+    logger.info("Inserting data from perf_data.json:")
+    inserter.insert_data(data)
+
+    # Optionally, you can attempt to insert the same data again to test duplicate prevention and update logic
+    # Uncomment the following lines if you want to perform this step
+    """
+    logger.info("\nInserting duplicate data from perf_data.json to test update logic:")
+    inserter.insert_data(data)
+    """
+
+    # Insert additional data with modifications (if needed)
+    # You can define another JSON file or modify the existing perf_data.json and rerun the script
+
+    # Close the database connection
+    inserter.close()
+
+if __name__ == "__main__":
+    main()
+
