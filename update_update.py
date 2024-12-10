@@ -128,20 +128,17 @@ class DataInserter:
         """
         for column, new_value in new_record.items():
             if column in excluded_columns:
-                # Ignore excluded columns for differences
                 continue
             serialized_new_value = self.serialize_field(new_value)
             existing_value = existing_record.get(column, "")
 
             if column in json_columns:
-                # Compare serialized JSON values
                 if existing_value != serialized_new_value:
                     logger.debug(
                         f"Difference found in JSON column '{column}': existing='{existing_value}' vs new='{serialized_new_value}'"
                     )
                     return True
             else:
-                # Normal column comparison
                 if existing_value != serialized_new_value:
                     logger.debug(
                         f"Difference found in column '{column}': existing='{existing_value}' vs new='{serialized_new_value}'"
@@ -203,13 +200,7 @@ class DataInserter:
         where_values = tuple(unique_values[key] for key in unique_keys)
 
         # Determine which columns to select explicitly
-        # Include all columns from the record except excluded ones
-        # so we can compare them if record exists.
         all_columns = [col for col in cleaned_record.keys() if col not in excluded_columns]
-
-        # If no columns to select (e.g., all are excluded), we still need to 
-        # select the unique keys to determine if record exists.
-        # So ensure unique keys are also included in the select query
         select_columns = list(set(all_columns + unique_keys))
 
         # Perform SELECT with explicit columns
@@ -240,6 +231,9 @@ class DataInserter:
                     serialized_value = self.serialize_field(value)
                     existing_serialized = existing_record.get(column, "")
                     if existing_serialized != serialized_value:
+                        logger.info(
+                            f"Updating column '{column}' in '{table_name}': from '{existing_serialized}' to '{serialized_value}'"
+                        )
                         update_fields.append(f"{column} = %s")
                         update_values.append(serialized_value)
 
@@ -387,3 +381,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
