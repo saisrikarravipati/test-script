@@ -27,9 +27,6 @@ def normalize_json_value(value_str: str) -> Any:
     Attempt to parse a JSON string into a Python object.
     If parsing fails, try replacing single quotes with double quotes and parse again.
     If it still fails, return the original string.
-
-    :param value_str: The string representation of the JSON value.
-    :return: A Python object (dict, list, etc.) if successfully parsed, else the original string.
     """
     value_str = value_str.strip()
     if value_str == "":
@@ -39,15 +36,31 @@ def normalize_json_value(value_str: str) -> Any:
     try:
         return json.loads(value_str)
     except json.JSONDecodeError:
-        # Attempt to fix quotes
+        # Attempt to fix quotes by replacing single quotes with double quotes
         fixed_str = value_str.replace("'", '"')
         try:
             return json.loads(fixed_str)
         except json.JSONDecodeError:
-            # Could not parse as JSON even after replacements
+            # Could not parse as JSON
             logger.debug(f"Could not parse value as JSON: {value_str}")
             return value_str
 
+def ensure_parsed_json(value: Any) -> Any:
+    """
+    Ensure the given value is parsed as JSON.
+    If it's already a dict or list, return as is.
+    If it's a string, try to parse it as JSON using normalize_json_value().
+    Otherwise, return as is.
+    """
+    if isinstance(value, dict) or isinstance(value, list):
+        # Already a dict or list
+        return value
+    elif isinstance(value, str):
+        # Try to parse the string
+        return normalize_json_value(value)
+    else:
+        # Some other type (int, None, etc.), just return as is
+        return value
 
 class DataInserter:
     """
@@ -101,9 +114,6 @@ class DataInserter:
     def serialize_field(self, value: Any) -> str:
         """
         Serialize a field to JSON if it's a dict or list, else return as string.
-
-        :param value: The value to serialize.
-        :return: Serialized JSON string or string representation of the value.
         """
         if isinstance(value, (dict, list)):
             return json.dumps(value)
@@ -115,19 +125,13 @@ class DataInserter:
     def clean_record_keys(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """
         Remove leading and trailing spaces from the keys of a record.
-
-        :param record: The original record with potential spaces in keys.
-        :return: A new record with cleaned keys.
         """
         cleaned_record = {k.strip(): v for k, v in record.items()}
         return cleaned_record
 
     def validate_table_name(self, table_name: str) -> bool:
         """
-        Validate that the table name matches the expected pattern (no spaces, alphanumeric and underscores).
-
-        :param table_name: The table name to validate.
-        :return: True if valid, False otherwise.
+        Validate that the table name matches the expected pattern.
         """
         pattern = r'^[A-Za-z0-9_]+$'
         if re.match(pattern, table_name):
@@ -141,16 +145,9 @@ class DataInserter:
     def records_differ(self, existing_record: Dict[str, Any], new_record: Dict[str, Any],
                        json_columns: List[str], excluded_columns: List[str]) -> bool:
         """
-        Compare fields (excluding excluded_columns) between existing and new records 
-        to determine if they differ.
+        Compare fields (excluding excluded_columns) between existing and new records to determine if they differ.
         
-        For JSON columns, parse both existing and new values into Python objects and compare those objects.
-
-        :param existing_record: The existing record from the database as a dictionary.
-        :param new_record: The new record to compare.
-        :param json_columns: List of columns that contain JSON data.
-        :param excluded_columns: List of columns to exclude from comparison.
-        :return: True if any non-excluded field differs, False otherwise.
+        For JSON columns, parse both existing and new values into Python objects and compare.
         """
         for column, new_value in new_record.items():
             if column in excluded_columns:
@@ -160,8 +157,8 @@ class DataInserter:
 
             if column in json_columns:
                 # Normalize both sides to Python objects
-                parsed_existing = normalize_json_value(existing_value)
-                parsed_new = normalize_json_value(serialized_new_value)
+                parsed_existing = ensure_parsed_json(existing_value)
+                parsed_new = ensure_parsed_json(serialized_new_value)
                 if parsed_existing != parsed_new:
                     logger.debug(
                         f"Difference found in JSON column '{column}': existing='{parsed_existing}' vs new='{parsed_new}'"
@@ -180,16 +177,6 @@ class DataInserter:
     def insert_or_update_record(self, table_name: str, record: Dict[str, Any]):
         """
         Insert a new record or update an existing record in the specified table.
-
-        If record exists:
-            - Compare fields (excluding excluded_columns).
-            - If differences found, update the record.
-            - If no differences, skip.
-        If record does not exist:
-            - Insert a new record.
-
-        :param table_name: Name of the table.
-        :param record: Dictionary containing column-value pairs.
         """
         # Validate table name
         if not self.validate_table_name(table_name):
@@ -250,7 +237,7 @@ class DataInserter:
             existing_record = dict(zip(select_columns, result[0]))
             logger.debug(f"Existing record found in '{table_name}': {existing_record}")
 
-            # Check if fields differ (excluding excluded_columns)
+            # Check if fields differ
             if self.records_differ(existing_record, cleaned_record, json_columns, excluded_columns):
                 # Prepare fields for update
                 update_fields = []
@@ -261,10 +248,9 @@ class DataInserter:
                     serialized_value = self.serialize_field(value)
                     existing_serialized = existing_record.get(column, "")
 
-                    # For JSON columns, normalize before comparing to log changes correctly
                     if column in json_columns:
-                        parsed_existing = normalize_json_value(existing_serialized)
-                        parsed_new = normalize_json_value(serialized_value)
+                        parsed_existing = ensure_parsed_json(existing_serialized)
+                        parsed_new = ensure_parsed_json(serialized_value)
                         if parsed_existing != parsed_new:
                             logger.info(
                                 f"Updating JSON column '{column}' in '{table_name}': from '{parsed_existing}' to '{parsed_new}'"
@@ -332,8 +318,6 @@ class DataInserter:
     def insert_data(self, data: Dict[str, List[Dict[str, Any]]]):
         """
         Insert or update records into their respective tables.
-
-        :param data: Dictionary containing table names as keys and lists of records as values.
         """
         for table_name, records in data.items():
             if not isinstance(records, list):
@@ -377,9 +361,6 @@ class DataInserter:
 def load_json_file(file_path: str) -> Dict[str, Any]:
     """
     Load JSON data from a file.
-
-    :param file_path: Path to the JSON file.
-    :return: Parsed JSON data as a dictionary.
     """
     if not os.path.isfile(file_path):
         logger.error(f"File '{file_path}' does not exist.")
